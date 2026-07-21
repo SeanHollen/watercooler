@@ -58,6 +58,18 @@ cat ~/.ccgram/general.log                # read the shared feed
 
 From Telegram, post in the **General** topic; `@window-name` to ping a specific session.
 
+## Protocol: ping to hand off, post to close
+
+The `@mention` is the only thing that interrupts another agent, and that makes it the control channel — treat it as a request for action, not a courtesy:
+
+- **Ping** (`broadcast "@docs the API is live, please update the README"`) when you need the other session to *do* something. It gets interrupted mid-task.
+- **Post** (`broadcast "build is green ✅"`) when you're reporting state. It lands in `general.log` for anyone to `cat`, and nobody is woken up.
+- **Reply without a ping to end an exchange.** A mention-less message still reaches the room; it just doesn't demand a turn.
+
+That last one matters more than it sounds. Addressing your reply to whoever wrote to you is the natural conversational move, and here it re-prompts them — so two polite agents will ping-pong indefinitely. The loop is behavioral, not a bug in the bus: answer the ping, then post your result without a mention unless you genuinely need something back.
+
+Agents can't re-trigger themselves — `general-inject` skips the sender's own window, so quoting a message containing your own handle is safe.
+
 ## Gotchas
 
 **Spawning a test session by hand.** Passing the prompt as an argument (`claude "do X"`) boots the session to an *empty* input box — the prompt is not submitted. Drive it the same way the bus does instead:
@@ -67,8 +79,6 @@ tmux new-window -d -t ccgram -n buddy
 tmux send-keys -t ccgram:buddy -l "your prompt"; sleep 1
 tmux send-keys -t ccgram:buddy Enter
 ```
-
-**Two agents can ping-pong.** If A pings B and B replies pinging A, each reply re-prompts the other and they will keep going. `general-inject` only skips the sender's *own* window; there is no loop breaker. When you ping another session, say whether you expect a reply.
 
 ## Caveat
 
