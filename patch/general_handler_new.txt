@@ -1,0 +1,31 @@
+async def handle_general_topic_message(
+    bot: Bot, message: Message, chat_id: int
+) -> None:
+    """Shared 'General' room bus (user patch).
+
+    Instead of nagging to use a named topic, this logs every General-topic
+    message to ~/.ccgram/general.log and proactively prompts any ccgram
+    session whose window name is @mentioned. Self-contained tmux/log logic
+    lives in ~/.local/bin/general-inject.
+    """
+    import os
+    import subprocess
+
+    text = message.text or getattr(message, "caption", None) or ""
+    sender = "you"
+    try:
+        u = message.from_user
+        if u is not None:
+            sender = u.username or u.first_name or "you"
+    except Exception:
+        pass
+    try:
+        subprocess.Popen(
+            [os.path.expanduser("~/.local/bin/general-inject"), sender, text],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+    with contextlib.suppress(TelegramError):
+        await message.set_reaction("👀")

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# general-inject <sender> <text...>
+# Shared "General room" bus for ccgram sessions:
+#   1. appends the message to ~/.ccgram/general.log (the readable shared feed)
+#   2. proactively prompts any session whose tmux window name is @mentioned,
+#      by injecting the message into that Claude's input (interrupts it).
+set -uo pipefail
+SENDER="${1:-someone}"; shift || true
+TEXT="$*"
+LOG="$HOME/.ccgram/general.log"
+mkdir -p "$HOME/.ccgram"
+printf '[%s] %s: %s\n' "$(date '+%H:%M')" "$SENDER" "$TEXT" >> "$LOG"
+
+# Proactively prompt any @mentioned session (match against ccgram window names)
+for m in $(printf '%s' "$TEXT" | grep -oE '@[A-Za-z0-9_.-]+' || true); do
+  name="${m#@}"
+  win="$(tmux list-windows -t ccgram -F '#{window_name}' 2>/dev/null | grep -ixF "$name" | head -1 || true)"
+  [ -z "$win" ] && continue
+  # skip pinging the sender's own window
+  [ "$win" = "$SENDER" ] && continue
+  tmux send-keys -t "ccgram:$win" -l "[General ping from $SENDER] $TEXT"
+  sleep 0.4
+  tmux send-keys -t "ccgram:$win" Enter
+done

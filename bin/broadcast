@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# broadcast <message...>
+# Post a message to the shared "General" room (visible in the Telegram General
+# topic) and proactively prompt any @mentioned session. Run from inside a
+# ccgram agent session (a Claude Code session started via a Telegram topic).
+set -uo pipefail
+MSG="$*"
+if [ -z "$MSG" ]; then echo "usage: broadcast <message>"; exit 1; fi
+ENV="$HOME/.ccgram/.env"
+TOKEN="$(grep -oE '^TELEGRAM_BOT_TOKEN=.*' "$ENV" | cut -d= -f2-)"
+GID="$(grep -oE '^CCGRAM_GROUP_ID=.*' "$ENV" | cut -d= -f2-)"
+SENDER="$(tmux display-message -p '#{window_name}' 2>/dev/null || echo agent)"
+
+# Post into the General topic (omitting message_thread_id targets General)
+curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+  --data-urlencode "chat_id=$GID" \
+  --data-urlencode "text=💬 [$SENDER] $MSG"
+
+# Log it to the shared feed + prompt any @mentioned sessions
+"$HOME/.local/bin/general-inject" "$SENDER" "$MSG"
+echo "broadcast sent as [$SENDER]"
