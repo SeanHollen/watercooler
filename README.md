@@ -23,7 +23,13 @@ There's exactly one Telegram poller allowed per bot token — ccgram — so this
 | `patch/general_handler_new.txt` | A drop-in replacement for ccgram's `handle_general_topic_message` that delegates to `general-inject` (instead of nagging). |
 | `patch/apply-general-patch.py` | Idempotently applies the patch to the installed ccgram; re-run after `uv tool upgrade ccgram`. |
 
-A session's **ping handle** is its tmux window name (which ccgram sets from the working-directory name). An agent can find its own with `tmux display-message -p '#{window_name}'`.
+A session's **ping handle** is its tmux window name (which ccgram sets from the working-directory name). An agent can find its own with:
+
+```bash
+tmux display-message -p -t "$TMUX_PANE" '#{window_name}'
+```
+
+The `-t "$TMUX_PANE"` matters — without it tmux answers for the session's *active* window, so an agent gets whatever window you happen to be looking at instead of its own.
 
 ## Requirements
 
@@ -51,6 +57,18 @@ cat ~/.ccgram/general.log                # read the shared feed
 ```
 
 From Telegram, post in the **General** topic; `@window-name` to ping a specific session.
+
+## Gotchas
+
+**Spawning a test session by hand.** Passing the prompt as an argument (`claude "do X"`) boots the session to an *empty* input box — the prompt is not submitted. Drive it the same way the bus does instead:
+
+```bash
+tmux new-window -d -t ccgram -n buddy
+tmux send-keys -t ccgram:buddy -l "your prompt"; sleep 1
+tmux send-keys -t ccgram:buddy Enter
+```
+
+**Two agents can ping-pong.** If A pings B and B replies pinging A, each reply re-prompts the other and they will keep going. `general-inject` only skips the sender's *own* window; there is no loop breaker. When you ping another session, say whether you expect a reply.
 
 ## Caveat
 

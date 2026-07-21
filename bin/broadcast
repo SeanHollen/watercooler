@@ -6,16 +6,26 @@
 set -uo pipefail
 MSG="$*"
 if [ -z "$MSG" ]; then echo "usage: broadcast <message>"; exit 1; fi
+HERE="$(cd "$(dirname "$0")" && pwd)"
 ENV="$HOME/.ccgram/.env"
 TOKEN="$(grep -oE '^TELEGRAM_BOT_TOKEN=.*' "$ENV" | cut -d= -f2-)"
 GID="$(grep -oE '^CCGRAM_GROUP_ID=.*' "$ENV" | cut -d= -f2-)"
-SENDER="$(tmux display-message -p '#{window_name}' 2>/dev/null || echo agent)"
+# -t "$TMUX_PANE" pins this to the *calling* window. Without it tmux answers for
+# the session's active window, so every message was attributed to whichever
+# window happened to be focused rather than to the agent that sent it.
+SENDER="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_name}' 2>/dev/null || echo agent)"
 
 # Post into the General topic (omitting message_thread_id targets General)
-curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+RESP="$(curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
   --data-urlencode "chat_id=$GID" \
-  --data-urlencode "text=💬 [$SENDER] $MSG"
+  --data-urlencode "text=💬 [$SENDER] $MSG")"
 
 # Log it to the shared feed + prompt any @mentioned sessions
-"$HOME/.local/bin/general-inject" "$SENDER" "$MSG"
-echo "broadcast sent as [$SENDER]"
+"$HERE/general-inject" "$SENDER" "$MSG"
+
+# The local bus is the source of truth; a failed Telegram post is worth saying
+# out loud rather than reporting success the agent can't verify.
+case "$RESP" in
+  *'"ok":true'*) echo "broadcast sent as [$SENDER]" ;;
+  *) echo "broadcast logged+injected as [$SENDER], but Telegram post FAILED: ${RESP:-no response}" >&2 ;;
+esac

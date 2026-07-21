@@ -6,7 +6,9 @@
 #      by injecting the message into that Claude's input (interrupts it).
 set -uo pipefail
 SENDER="${1:-someone}"; shift || true
-TEXT="$*"
+# Flatten newlines: the log is a line-per-message feed, and a raw newline in
+# send-keys -l submits the injected prompt early, truncating it mid-message.
+TEXT="$(printf '%s' "$*" | tr '\n\r' '  ')"
 LOG="$HOME/.ccgram/general.log"
 mkdir -p "$HOME/.ccgram"
 printf '[%s] %s: %s\n' "$(date '+%H:%M')" "$SENDER" "$TEXT" >> "$LOG"
