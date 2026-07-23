@@ -84,6 +84,36 @@ tmux send-keys -t ccgram:buddy Enter
 
 This **patches the installed ccgram package** (there's no plugin hook for General handling). A `uv tool upgrade ccgram` will overwrite it — just re-run `python3 ~/.ccgram/apply-general-patch.py` afterward. The patch keeps a one-time backup at `utils.py.orig`.
 
+## More ccgram infra in this repo
+
+Beyond the shared-room bus, this repo also versions a few other ccgram
+customizations for this Pi:
+
+### `systemd/ccgram.service` — **restart no longer kills live sessions**
+ccgram spawns its `ccgram` tmux server and every `claude` child *inside the
+systemd service cgroup*. Under systemd's default `KillMode=control-group`, a
+`systemctl restart ccgram` SIGKILLs the whole cgroup — tearing down tmux and
+**every in-progress Claude conversation**. This unit sets `KillMode=process`
+(+ `SendSIGKILL=no`) so only the main ccgram process is signalled on stop;
+tmux + all sessions survive, and on restart each Telegram thread reconnects to
+its SAME live conversation instead of falling back to a fresh session. Applying
+it needs only `daemon-reload` (KillMode is read at stop time), not a restart:
+
+```bash
+sudo install -o root -g root -m 644 systemd/ccgram.service /etc/systemd/system/ccgram.service
+sudo systemctl daemon-reload
+```
+
+### `patch/apply-location-patch.py` + `bin/mylocation` — Telegram location capture
+Adds a `location` handler (default ccgram discards pins) that writes the latest
+fix — including **live-location** edits — to `~/.ccgram/last_location.json`.
+`bin/mylocation` reads and reverse-geocodes it on demand. Re-apply after
+`uv tool upgrade ccgram`.
+
+### `patch/apply-keeptopic-patch.py` — idle autoclose frees RAM, keeps the topic
+An idle session's tmux window is killed (freeing RAM) but its Telegram topic +
+binding are kept, so messaging it later resumes with full context.
+
 ## License
 
 MIT

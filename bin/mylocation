@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Print the latest Telegram location pin captured by ccgram.
+
+Reads ~/.ccgram/last_location.json (written by the location-patch handler) and
+reverse-geocodes it to a human address via OpenStreetMap Nominatim.
+
+Usage:
+    mylocation           # human summary (coords + address + age)
+    mylocation --json    # raw JSON as captured
+"""
+import json
+import pathlib
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+F = pathlib.Path.home() / ".ccgram" / "last_location.json"
+
+
+def main() -> int:
+    if not F.exists():
+        print(
+            "No location captured yet. Share a location pin in Telegram "
+            "(tap 📎 → Location), then re-run.",
+            file=sys.stderr,
+        )
+        return 1
+
+    data = json.loads(F.read_text())
+    if "--json" in sys.argv:
+        print(json.dumps(data, indent=2))
+        return 0
+
+    lat = data["latitude"]
+    lon = data["longitude"]
+
+    age_s = time.time() - data.get("updated_at", 0)
+    if age_s < 90:
+        age = f"{int(age_s)}s ago"
+    elif age_s < 5400:
+        age = f"{int(age_s / 60)} min ago"
+    else:
+        age = f"{age_s / 3600:.1f} h ago"
+
+    address = "(reverse-geocode unavailable)"
+    try:
+        q = urllib.parse.urlencode(
+            {"lat": lat, "lon": lon, "format": "json", "zoom": "18"}
+        )
+        req = urllib.request.Request(
+            f"https://nominatim.openstreetmap.org/reverse?{q}",
+            headers={"User-Agent": "ccgram-mylocation/1.0 (seanahollen@gmail.com)"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            address = json.loads(r.read()).get("display_name", address)
+    except Exception as e:  # noqa: BLE001
+        address = f"(reverse-geocode failed: {e})"
+
+    live = " [LIVE]" if data.get("is_live") else ""
+    acc = data.get("horizontal_accuracy")
+    acc_str = f"  ±{acc:.0f}m" if acc else ""
+    print(f"📍 {lat:.5f}, {lon:.5f}{acc_str}{live}   ({age})")
+    print(f"   {address}")
+    print(f"   https://www.google.com/maps?q={lat},{lon}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

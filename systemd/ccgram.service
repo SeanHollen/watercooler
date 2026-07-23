@@ -1,0 +1,34 @@
+[Unit]
+Description=ccgram — Telegram multi-session bridge for Claude Code (Pi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=seanhollen
+Group=seanhollen
+WorkingDirectory=/home/seanhollen
+Environment=HOME=/home/seanhollen
+Environment=PATH=/home/seanhollen/.local/bin:/home/seanhollen/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/seanhollen/.local/bin/ccgram run
+Restart=on-failure
+RestartSec=10
+
+# --- Session survival across restarts (added 2026-07-22) ---
+# ccgram spawns its `ccgram` tmux server (and every `claude` child) inside this
+# service's cgroup. With the default KillMode=control-group, `systemctl restart`
+# SIGKILLs the ENTIRE cgroup — tearing down tmux and every live Claude session.
+# That is what abruptly closed an in-progress conversation when a session
+# restarted ccgram to load a patch.
+#
+# KillMode=process makes systemd signal ONLY the main ccgram process on stop, so
+# tmux + all Claude sessions keep running. On restart ccgram reconnects to the
+# still-alive tmux session and re-binds each Telegram thread to its SAME live
+# window — same conversation, not a fresh one. SendSIGKILL=no guarantees no
+# escalation to the children.
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
