@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# roster — the directory of sessions you can address in the watercooler.
+#
+# Without this an agent has to guess handles, or know the tmux incantation that
+# yields its own. Dormant peers are listed too: they are real sessions whose
+# window idle-autoclose freed, so they are worth knowing about even though a
+# ping cannot reach them until their Telegram topic is messaged.
+set -uo pipefail
+# shellcheck source=watercooler-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/watercooler-lib.sh"
+
+ME="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_name}' 2>/dev/null || true)"
+
+printf '%-24s %-8s %s\n' HANDLE STATE CWD
+wc_roster | while IFS=$'\t' read -r name state cwd; do
+  mark=""
+  [ "$name" = "$ME" ] && mark="  <- you"
+  printf '@%-23s %-8s %s%s\n' "$name" "$state" "$cwd" "$mark"
+done
+
+cat <<'EOF'
+
+  @handle in a broadcast interrupts that session — use it to hand off work.
+  A message with no @mention just lands in the feed (cat ~/.ccgram/general.log).
+  Dormant sessions cannot be pinged until their Telegram topic is messaged.
+EOF

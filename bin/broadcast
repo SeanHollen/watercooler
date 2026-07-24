@@ -1,13 +1,33 @@
 #!/usr/bin/env bash
-# broadcast <message...>
+# broadcast [--conv <id>] <message...>
+#
 # Post a message to the shared "General" room (visible in the Telegram General
 # topic) and proactively prompt any @mentioned session. Run from inside a
 # ccgram agent session (a Claude Code session started via a Telegram topic).
+#
+#   broadcast "build is green"                 # post: ambient, wakes nobody
+#   broadcast "@docs the API is live, update"  # ping: interrupts @docs
+#   broadcast --conv 4f2a "done, thanks"       # reply that ENDS a conversation
 set -uo pipefail
-MSG="$*"
-if [ -z "$MSG" ]; then echo "usage: broadcast <message>"; exit 1; fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ENV="$HOME/.ccgram/.env"
+# shellcheck source=watercooler-lib.sh
+. "$HERE/watercooler-lib.sh"
+
+CONV=-
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --conv) CONV="${2:--}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+MSG="$*"
+if [ -z "$MSG" ]; then
+  echo "usage: broadcast [--conv <id>] <message>" >&2
+  exit 1
+fi
+
+ENV="$WC_DIR/.env"
 TOKEN="$(grep -oE '^TELEGRAM_BOT_TOKEN=.*' "$ENV" | cut -d= -f2-)"
 GID="$(grep -oE '^CCGRAM_GROUP_ID=.*' "$ENV" | cut -d= -f2-)"
 # -t "$TMUX_PANE" pins this to the *calling* window. Without it tmux answers for
@@ -15,13 +35,54 @@ GID="$(grep -oE '^CCGRAM_GROUP_ID=.*' "$ENV" | cut -d= -f2-)"
 # window happened to be focused rather than to the agent that sent it.
 SENDER="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_name}' 2>/dev/null || echo agent)"
 
+MENTIONS="$(wc_mentions "$MSG")"
+# Mint the conversation id here rather than letting general-inject do it, so the
+# Telegram header, the breadcrumb and the injected copy all carry the same one.
+[ "$CONV" = "-" ] && [ -n "$MENTIONS" ] && CONV="$(wc_new_conv)"
+
+if [ "$CONV" = "-" ]; then HEADER="💬 [$SENDER]"; else HEADER="💬 [$SENDER · #$CONV]"; fi
+
 # Post into the General topic (omitting message_thread_id targets General)
 RESP="$(curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
   --data-urlencode "chat_id=$GID" \
-  --data-urlencode "text=💬 [$SENDER] $MSG")"
+  --data-urlencode "text=$HEADER $MSG")"
+MSG_ID="$(printf '%s' "$RESP" | grep -oE '"message_id":[0-9]+' | head -1 | cut -d: -f2)"
 
 # Log it to the shared feed + prompt any @mentioned sessions
-"$HERE/general-inject" "$SENDER" "$MSG"
+"$HERE/general-inject" --role agent --sender "$SENDER" --conv "$CONV" -- "$MSG"
+INJECT_STATUS=$?
+
+# Breadcrumb into the sender's OWN topic. Without it the human watching this
+# agent's topic just sees it fall silent mid-task with no explanation of where
+# the work went.
+if [ -n "$MENTIONS" ] && [ -n "${MSG_ID:-}" ]; then
+  THREAD="$(SENDER="$SENDER" python3 - "$WC_STATE" <<'PY'
+import json, os, sys
+try:
+    with open(sys.argv[1]) as fh:
+        state = json.load(fh)
+except Exception:
+    sys.exit(0)
+me = os.environ.get("SENDER", "").lower()
+names = state.get("window_display_names") or {}
+wid = next((w for w, n in names.items() if (n or "").lower() == me), None)
+if wid:
+    for user_id, threads in (state.get("thread_bindings") or {}).items():
+        for thread_id, bound in threads.items():
+            if bound == wid:
+                print(thread_id)
+                sys.exit(0)
+PY
+)"
+  if [ -n "$THREAD" ]; then
+    LINK="https://t.me/c/${GID#-100}/$MSG_ID"
+    PEERS="$(printf '%s' "$MENTIONS" | sed 's/^/@/' | tr '\n' ' ')"
+    curl -s -o /dev/null -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+      --data-urlencode "chat_id=$GID" \
+      --data-urlencode "message_thread_id=$THREAD" \
+      --data-urlencode "text=↪️ pinged ${PEERS}in the watercooler (#$CONV): $LINK"
+  fi
+fi
 
 # The local bus is the source of truth; a failed Telegram post is worth saying
 # out loud rather than reporting success the agent can't verify.
@@ -29,3 +90,5 @@ case "$RESP" in
   *'"ok":true'*) echo "broadcast sent as [$SENDER]" ;;
   *) echo "broadcast logged+injected as [$SENDER], but Telegram post FAILED: ${RESP:-no response}" >&2 ;;
 esac
+[ "$CONV" != "-" ] && echo "reply with: broadcast --conv $CONV \"...\""
+exit $INJECT_STATUS

@@ -7,6 +7,10 @@ async def handle_general_topic_message(
     message to ~/.ccgram/general.log and proactively prompts any ccgram
     session whose window name is @mentioned. Self-contained tmux/log logic
     lives in ~/.local/bin/general-inject.
+
+    The message is tagged ``--role human``: a human turn resets a
+    conversation's depth counter, because the room exists to serve them and
+    their message is never part of an agent politeness loop.
     """
     import os
     import subprocess
@@ -21,7 +25,15 @@ async def handle_general_topic_message(
         pass
     try:
         subprocess.Popen(
-            [os.path.expanduser("~/.local/bin/general-inject"), sender, text],
+            [
+                os.path.expanduser("~/.local/bin/general-inject"),
+                "--role",
+                "human",
+                "--sender",
+                sender,
+                "--",
+                text,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

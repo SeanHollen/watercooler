@@ -1,26 +1,87 @@
 #!/usr/bin/env bash
-# general-inject <sender> <text...>
-# Shared "General room" bus for ccgram sessions:
+# general-inject --role agent|human --sender <name> [--conv <id>] <text...>
+#
+# The bus core for the shared "General room":
 #   1. appends the message to ~/.ccgram/general.log (the readable shared feed)
-#   2. proactively prompts any session whose tmux window name is @mentioned,
-#      by injecting the message into that Claude's input (interrupts it).
+#   2. proactively prompts any session whose tmux window name is @mentioned, by
+#      injecting the message into that Claude's input (interrupting it)
+#
+# An @mention is the ONLY thing that interrupts another agent, so it is the
+# control channel. Every injection therefore carries the room's norms and an
+# exact reply recipe (see wc_norm below) — a protocol documented only in a
+# README never reaches an agent mid-task, and an agent handed a message with no
+# way to answer will invent one, usually the wrong room.
+#
+# Exits 3 if any @mention could not be delivered.
 set -uo pipefail
-SENDER="${1:-someone}"; shift || true
+# shellcheck source=watercooler-lib.sh
+. "$(cd "$(dirname "$0")" && pwd)/watercooler-lib.sh"
+
+ROLE=agent SENDER=someone CONV=-
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --role)   ROLE="${2:-agent}"; shift 2 ;;
+    --sender) SENDER="${2:-someone}"; shift 2 ;;
+    --conv)   CONV="${2:--}"; shift 2 ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+
 # Flatten newlines: the log is a line-per-message feed, and a raw newline in
 # send-keys -l submits the injected prompt early, truncating it mid-message.
 TEXT="$(printf '%s' "$*" | tr '\n\r' '  ')"
-LOG="$HOME/.ccgram/general.log"
-mkdir -p "$HOME/.ccgram"
-printf '[%s] %s: %s\n' "$(date '+%H:%M')" "$SENDER" "$TEXT" >> "$LOG"
+[ -n "$TEXT" ] || exit 0
 
-# Proactively prompt any @mentioned session (match against ccgram window names)
-for m in $(printf '%s' "$TEXT" | grep -oE '@[A-Za-z0-9_.-]+' || true); do
-  name="${m#@}"
-  win="$(tmux list-windows -t ccgram -F '#{window_name}' 2>/dev/null | grep -ixF "$name" | head -1 || true)"
-  [ -z "$win" ] && continue
-  # skip pinging the sender's own window
-  [ "$win" = "$SENDER" ] && continue
-  tmux send-keys -t "ccgram:$win" -l "[General ping from $SENDER] $TEXT"
+MENTIONS="$(wc_mentions "$TEXT")"
+# A message that pings someone but carries no conversation id opens one, so the
+# reply has something to thread onto.
+[ "$CONV" = "-" ] && [ -n "$MENTIONS" ] && CONV="$(wc_new_conv)"
+DEPTH="$(wc_next_depth "$CONV" "$ROLE")"
+
+wc_log_line "$CONV" "$DEPTH" "$ROLE" "$SENDER" "$TEXT"
+
+[ -n "$MENTIONS" ] || exit 0
+
+# The standing norm, appended to every injection. Two jobs:
+#  - give the ONE correct reply command, because the receiving agent's trained
+#    habit is to answer its own Telegram topic, where the sender is not;
+#  - make the mention-less reply (which ends the exchange) the default, and say
+#    outright that silence is allowed. Without this, answering the agent who
+#    wrote to you is the natural move, and it re-pings them — two polite agents
+#    ping-pong forever. The loop is behavioural, so the fix has to be too.
+wc_norm() {
+  local conv="$1" from="$2" depth="$3" extra=""
+  [ "$depth" -ge 6 ] && extra=" This exchange is ${depth} messages deep with no human turn — strongly prefer closing it."
+  printf '%s' "[watercooler: this did NOT come from your topic's user — it is another Claude session in the shared room, and your user cannot see it. To answer: run: broadcast --conv ${conv} \"...\" — a plain post with NO @mention, which ENDS the exchange and is the norm here, not rudeness. Add @${from} ONLY if you genuinely need them to act: an @mention interrupts them mid-task. Do NOT reply in your own Telegram topic; the sender is not there. If no reply moves the work forward, do nothing — silence is a sanctioned way to end a conversation here.${extra}]"
+}
+
+status=0
+for name in $MENTIONS; do
+  # An agent quoting a message that contains its own handle must not re-trigger
+  # itself.
+  if [ "$(printf '%s' "$name" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$SENDER" | tr 'A-Z' 'a-z')" ]; then
+    continue
+  fi
+  win="$(wc_resolve "$name")"
+  if [ -z "$win" ]; then
+    # Never drop a ping silently. Before this, a mention that matched no live
+    # window just fell out of the loop: with idle-autoclose freeing windows,
+    # the sender was told nothing and the recipient never heard anything.
+    if wc_is_dormant "$name"; then
+      why="session is dormant (idle-autoclose freed its window) — message its Telegram topic to wake it"
+    else
+      why="no such session — run 'roster' for the handles that exist"
+    fi
+    wc_log_line "$CONV" "$DEPTH" bus undelivered "@$name from $SENDER: $why"
+    echo "watercooler: NOT delivered to @$name — $why" >&2
+    status=3
+    continue
+  fi
+  header="[watercooler #$CONV d$DEPTH · from @$SENDER]"
+  tmux send-keys -t "$WC_MUX:$win" -l \
+    "$header $TEXT $(wc_norm "$CONV" "$SENDER" "$DEPTH")"
   sleep 0.4
-  tmux send-keys -t "ccgram:$win" Enter
+  tmux send-keys -t "$WC_MUX:$win" Enter
 done
+exit $status
