@@ -26,6 +26,15 @@ There's exactly one Telegram poller allowed per bot token — ccgram — so this
 | `patch/general_handler_new.txt` | A drop-in replacement for ccgram's `handle_general_topic_message` that delegates to `general-inject` (instead of nagging). |
 | `patch/apply-general-patch.py` | Idempotently applies the patch to the installed ccgram; re-run after `uv tool upgrade ccgram`. |
 | `patch/apply-autostart-patch.py` | Zero-tap session creation + message-derived session names (see below). |
+| `patch/apply-media-autostart-patch.py` | Media works as a topic's first message, and transcriptions go to the agent with no confirm tap (see below). |
+| `patch/apply-keeptopic-patch.py` | Idle autoclose frees RAM but keeps the topic (see below). |
+| `patch/apply-location-patch.py` | Telegram location capture (see below). |
+| `patch/apply-askoptions-patch.py` | One tappable button per `AskUserQuestion` option, instead of arrow-key nudging. |
+| `patch/apply-audio-transcribe-patch.py` | Transcribes *uploaded* audio files, not just in-app voice notes. |
+| `patch/apply-whisper-local-patch.py` | A `local` whisper provider — `whisper-cli` on-device, no API key, nothing leaves the box. |
+| `patch/apply-yolo-default-patch.py` | New sessions launch straight into YOLO, skipping the mode picker. |
+| `patch/apply-all-patches.sh` | Runs every `apply-*.py` in filename order, never aborting on one failure. |
+| `systemd/10-apply-patches.conf` | `ExecStartPre` drop-in that runs the above on every ccgram start, so `uv tool upgrade ccgram` can't silently revert the suite. |
 
 A session's **ping handle** is its tmux window name. An agent can find its own with:
 
@@ -185,6 +194,36 @@ fix — including **live-location** edits — to `~/.ccgram/last_location.json`.
 ### `patch/apply-keeptopic-patch.py` — idle autoclose frees RAM, keeps the topic
 An idle session's tmux window is killed (freeing RAM) but its Telegram topic +
 binding are kept, so messaging it later resumes with full context.
+
+### `patch/apply-media-autostart-patch.py` — media opens a session; speech isn't gated
+Stock ccgram resolves the topic's bound window *before* doing any work with an
+incoming voice note, photo or document, and gives up if there isn't one:
+
+> ⚠ Topic not bound — send a text message first to pick a directory, then re-record.
+
+So a new topic's first message could only ever be text, and a voice note was
+rejected without whisper ever running. Text doesn't have this problem because it
+goes through `_handle_unbound_topic`, which `apply-autostart-patch.py` already
+turned into a zero-tap session launch — so media now calls the same thing, via a
+new `handlers/media_autostart.py`:
+
+- **`ensure_window()`** — resolve the topic's window, launching a session if it
+  is unbound. For a voice note the transcript becomes both the new session's
+  name and its first prompt (autostart's `pending_text`), so it must not then be
+  sent a second time; the return value is `(window_id, already_delivered)`.
+- **`deliver_to_agent()`** — the body of the old `vc:send` callback with the
+  callback removed: the shell-provider path or `send_to_window`, then 👀 → ✅
+  reactions on the original message.
+
+The **"✓ Send to agent / ✗ Discard" keyboard is gone**. A transcript is
+delivered on arrival and echoed into the topic so you can still see what whisper
+heard. Uploaded audio files send their transcript to the agent too, rather than
+printing it and dropping it.
+
+Ordering note: `apply-audio-transcribe-patch.py` rewrites
+`handlers/audio_transcribe.py` wholesale on every run, so a patch that *edits*
+that file has to sort after it. `media` > `audio` alphabetically, which is why
+the suite self-heals in the right order — keep it that way.
 
 ## Credits
 
