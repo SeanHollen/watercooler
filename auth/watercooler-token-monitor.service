@@ -1,0 +1,12 @@
+[Unit]
+Description=watercooler — Claude auth health + expiry monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=seanhollen
+Group=seanhollen
+Environment=HOME=/home/seanhollen
+Environment=PATH=/home/seanhollen/.local/bin:/home/seanhollen/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/seanhollen/.local/bin/watercooler-token-monitor

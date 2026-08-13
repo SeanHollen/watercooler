@@ -237,3 +237,34 @@ which solves the same problem with a standalone proxy instead of a ccgram patch.
 ## License
 
 MIT
+
+## Headless auth — no browser logins, ever
+
+`auth/` keeps Claude Code authenticated on a headless Pi without needing a browser
+on the box. It uses a **long-lived OAuth token** (`claude setup-token`, valid ~1
+year, keeps your Claude subscription — no per-token API billing).
+
+**Install / re-install:**
+```bash
+claude setup-token                          # one login: open the printed URL on any
+                                            # device, paste the code back
+./auth/install-auth.sh <token-it-printed>
+```
+This wires the token three ways so it always applies and survives reboots — a
+systemd `EnvironmentFile` drop-in, `.bashrc`, and the running tmux server — and
+installs a **daily monitor** that messages your Telegram group if auth ever breaks
+*or* comes within a week of expiry. So a broken/logged-out session never surprises
+you again.
+
+**Renew (~yearly, when the monitor pings you):**
+```bash
+claude setup-token
+watercooler-set-token <new-token>
+```
+Fully remote: the login is just a URL you open on your phone + a code you paste
+back. Never touches the Pi's browser.
+
+Files: `install-auth.sh` (orchestrator), `set-token.sh` → `watercooler-set-token`,
+`token-monitor.sh` → `watercooler-token-monitor` (run daily by the timer),
+`30-auth-token.conf` (ccgram systemd drop-in), and the monitor `.service` / `.timer`.
+The token lives only in `~/.ccgram/auth.env` (chmod 600) — never in this repo.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the watercooler Claude-auth monitor daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
