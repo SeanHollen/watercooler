@@ -1,0 +1,19 @@
+
+    # watercooler patch: ALWAYS resume a topic's existing conversation (never
+    # start a new one). Any failure falls through to the original behaviour.
+    _wc_sid = None
+    try:
+        _wc_sid = window_query.get_session_id_for_window(window_id)
+    except Exception:
+        _wc_sid = None
+    if not _wc_sid and view is not None:
+        _wc_sid = getattr(view, "session_id", None)
+    if cwd and Path(cwd).is_dir():
+        try:
+            if await _auto_resume_dead_topic(
+                user_id, thread_id, cwd, _wc_sid, text, message
+            ):
+                lifecycle_strategy.clear_autoclose_timer(user_id, thread_id)
+                return True
+        except Exception:
+            logger.exception("watercooler auto-resume failed; falling back")

@@ -1,0 +1,48 @@
+async def _auto_resume_dead_topic(user_id, thread_id, cwd, session_id, text, message) -> bool:
+    """watercooler patch: when a message hits a topic whose window died, resume
+    its EXISTING conversation (exact session if known, else --continue) in bypass
+    mode instead of starting a new session. Returns True on success; any failure
+    returns False so the caller falls back to the original recovery behaviour."""
+    from ...providers import get_provider, resolve_launch_command
+    from ...session import session_manager
+    from ...session_map import session_map_sync
+    from ...window_state_store import CCGRAM_CREATED_WINDOW_ORIGIN
+    from ..status.topic_emoji import format_topic_name_for_mode
+
+    provider = get_provider()
+    approval_mode = "yolo"
+    if session_id:
+        launch_args = provider.make_launch_args(resume_id=session_id)
+    else:
+        launch_args = provider.make_launch_args(use_continue=True)
+    launch_command = resolve_launch_command(
+        provider.capabilities.name, approval_mode=approval_mode
+    )
+    success, _msg, wname, wid = await tmux_manager.create_window(
+        cwd, agent_args=launch_args, launch_command=launch_command
+    )
+    if not success:
+        return False
+    if provider.capabilities.supports_hook:
+        await session_map_sync.wait_for_session_map_entry(wid)
+    session_manager.set_window_origin(wid, CCGRAM_CREATED_WINDOW_ORIGIN)
+    session_manager.set_window_provider(wid, provider.capabilities.name)
+    session_manager.set_window_approval_mode(wid, approval_mode)
+    thread_router.bind_thread(user_id, thread_id, wid, window_name=wname)
+    chat = getattr(message, "chat", None)
+    if chat is not None and getattr(chat, "type", "") in ("group", "supergroup"):
+        thread_router.set_group_chat_id(user_id, thread_id, chat.id)
+    try:
+        client = PTBTelegramClient(message.get_bot())
+        await client.edit_forum_topic(
+            chat_id=thread_router.resolve_chat_id(user_id, thread_id),
+            message_thread_id=thread_id,
+            name=format_topic_name_for_mode(wname, approval_mode),
+        )
+    except Exception:
+        pass
+    if text:
+        await send_to_window(wid, text)
+    return True
+
+
