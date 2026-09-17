@@ -1,0 +1,21 @@
+[Unit]
+Description=telegram-topics proxy (PI2 — Zamua Telegram bus for Claude Code)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=seanhollen
+Environment=HOME=/home/seanhollen
+WorkingDirectory=/home/seanhollen/.claude/plugins/cache/zamua/telegram/0.3.2
+ExecStart=/usr/bin/env bash /home/seanhollen/.claude/plugins/cache/zamua/telegram/0.3.2/scripts/start-proxy.sh
+Restart=always
+RestartSec=5
+# Keep spawned tmux/claude topic sessions alive across a proxy restart.
+KillMode=process
+SendSIGKILL=no
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
