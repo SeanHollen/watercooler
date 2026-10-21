@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# ccgram-safe-restart — restart the ccgram bridge only when no Claude session is mid-turn.
+#
+# Why: a restart while a session is answering can drop the reply that session is
+# about to send. On 2026-10-21 watercooler's ship.sh restarted ccgram from INSIDE a
+# session, mid-turn; the session's final summary never reached Telegram.
+# ccgram.service's KillMode=process keeps the Claude sessions alive — it does not
+# keep the bridge's in-flight relay work.
+#
+# Usage:
+#   ccgram-safe-restart                  schedule: detach a waiter, return at once
+#                                        (the only safe form from inside a session)
+#   ccgram-safe-restart --wait           foreground: wait for idle, then restart
+#   ccgram-safe-restart --now            restart immediately (still logged)
+#   ccgram-safe-restart --check          print sessions that are mid-turn; exit 1 if any
+# Options:
+#   --max-wait SECS     restart anyway after waiting this long      (default 1800)
+#   --quiet-for SECS    every session must have been idle this long (default 20)
+#   --notify-topic ID   post the outcome into this Telegram topic via the Bot API
+#   --reason TEXT       free text for the log and the notice
+# Log: ~/.ccgram/safe-restart.log
+set -uo pipefail
+
+MUX="${WC_MUX:-ccgram}"
+LOG="$HOME/.ccgram/safe-restart.log"
+LOCK="$HOME/.ccgram/safe-restart.lock"
+MODE=schedule
+MAX_WAIT=1800
+QUIET_FOR=20
+TOPIC=""
+REASON="manual"
+PASS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wait)  MODE=wait; shift ;;
+    --now)   MODE=now; shift ;;
+    --check) MODE=check; shift ;;
+    --max-wait)     MAX_WAIT="${2:-1800}"; PASS+=("$1" "$2"); shift 2 ;;
+    --quiet-for)    QUIET_FOR="${2:-20}";  PASS+=("$1" "$2"); shift 2 ;;
+    --notify-topic) TOPIC="${2:-}";        PASS+=("$1" "$2"); shift 2 ;;
+    --reason)       REASON="${2:-manual}"; PASS+=("$1" "$2"); shift 2 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+
+notify() {
+  [ -n "$TOPIC" ] || return 0
+  set -a; . "$HOME/.ccgram/.env" 2>/dev/null; set +a
+  [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${CCGRAM_GROUP_ID:-}" ] || return 0
+  curl -s -m 20 -o /dev/null \
+    "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${CCGRAM_GROUP_ID}" \
+    --data-urlencode "message_thread_id=${TOPIC}" \
+    --data-urlencode "text=$1" || true
+}
+
+# Names of ccgram windows whose Claude is mid-turn. Claude Code's footer shows
+# "esc to interrupt" while a turn runs and "queued messages" when input is waiting.
+busy_sessions() {
+  local out="" wid name cmd pane
+  while read -r wid name cmd; do
+    [ "$cmd" = "claude" ] || continue
+    pane="$(tmux capture-pane -p -t "$wid" -S -25 2>/dev/null || true)"
+    if printf '%s' "$pane" | grep -q -E 'esc to interrupt|queued message'; then
+      out="$out $name"
+    fi
+  done < <(tmux list-windows -t "$MUX" -F '#{window_id} #{window_name} #{pane_current_command}' 2>/dev/null)
+  printf '%s' "${out# }"
+}
+
+do_restart() {
+  log "restarting ccgram ($REASON)"
+  if ! sudo -n systemctl restart ccgram; then
+    log "FAILED: systemctl restart ccgram"
+    notify "❌ ccgram restart FAILED ($REASON). Check: journalctl -u ccgram -n 50"
+    return 1
+  fi
+  sleep 4
+  if systemctl is-active --quiet ccgram; then
+    log "ccgram active"
+    notify "♻️ ccgram restarted ($REASON). Nothing was mid-turn; live sessions kept."
+    return 0
+  fi
+  log "FAILED: ccgram not active after restart"
+  notify "❌ ccgram did not come back after a restart ($REASON). Check: journalctl -u ccgram -n 50"
+  return 1
+}
+
+wait_idle() {
+  local waited=0 quiet=0 busy last=""
+  while :; do
+    busy="$(busy_sessions)"
+    if [ -z "$busy" ]; then
+      quiet=$((quiet + 5))
+      [ "$quiet" -ge "$QUIET_FOR" ] && return 0
+    else
+      quiet=0
+      [ "$busy" = "$last" ] || log "waiting: mid-turn → $busy"
+      last="$busy"
+    fi
+    if [ "$waited" -ge "$MAX_WAIT" ]; then
+      log "max wait ${MAX_WAIT}s reached; restarting anyway (busy: ${busy:-none})"
+      return 0
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+}
+
+case "$MODE" in
+  check)
+    busy="$(busy_sessions)"
+    if [ -n "$busy" ]; then echo "mid-turn: $busy"; exit 1; fi
+    echo "idle: no ccgram session is mid-turn"; exit 0 ;;
+  now)
+    do_restart ;;
+  wait)
+    exec 9>"$LOCK"
+    if ! flock -n 9; then
+      log "another safe-restart is already waiting; not starting a second one"
+      exit 0
+    fi
+    log "scheduled ($REASON); waiting until every session has been idle ${QUIET_FOR}s (max ${MAX_WAIT}s)"
+    wait_idle
+    do_restart ;;
+  schedule)
+    mkdir -p "$HOME/.ccgram"
+    setsid nohup "$0" --wait "${PASS[@]}" >>"$LOG" 2>&1 </dev/null &
+    echo "ccgram restart scheduled: it happens once no session has been mid-turn for ${QUIET_FOR}s (log: $LOG)" ;;
+esac

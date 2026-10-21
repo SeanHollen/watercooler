@@ -1,18 +1,21 @@
 async def handle_general_topic_message(
     bot: Bot, message: Message, chat_id: int
 ) -> None:
-    """Shared 'General' room bus (user patch).
+    """Shared 'General' room bus (watercooler patch).
 
-    Instead of nagging to use a named topic, this logs every General-topic
-    message to ~/.ccgram/general.log and proactively prompts any ccgram
-    session whose window name is @mentioned. Self-contained tmux/log logic
-    lives in ~/.local/bin/general-inject.
-
-    The message is tagged ``--role human``: a human turn resets a
-    conversation's depth counter, because the room exists to serve them and
-    their message is never part of an agent politeness loop.
+    1. Every General-topic message is appended to ~/.ccgram/general.log and any
+       @mentioned ccgram session is prompted with it (``general-inject``). A human
+       message is tagged ``--role human``: it resets a conversation's depth
+       counter, because the room exists to serve them.
+    2. A human message with NO @mention used to go nowhere: on 2026-10-21 five of
+       Sean's messages sat in the log while he waited for an answer. Now such a
+       message is forwarded into the session he most recently talked to (the
+       bound window whose transcript holds the newest human prompt), and a
+       notice in General says where it went. If nothing live can take it, the
+       notice says that instead. Silence is never an option here.
     """
     import os
+    import re
     import subprocess
 
     text = message.text or getattr(message, "caption", None) or ""
@@ -39,5 +42,128 @@ async def handle_general_topic_message(
         )
     except Exception:
         pass
+
+    if not text.strip() or re.search(r"@[A-Za-z0-9_.-]+", text):
+        # Room traffic: the @mention (if any) is delivered by general-inject.
+        with contextlib.suppress(TelegramError):
+            await message.set_reaction("👀")
+        return
+
+    forwarded_to = None
+    error = ""
+    try:
+        from .multiplexer.window_ops import send_to_window
+
+        for window_id, display in await _wc_rank_windows_by_human_activity():
+            ok, err = await send_to_window(
+                window_id,
+                "[forwarded from the General topic by ccgram — the user posted it "
+                "there by mistake; reply in your own topic as usual] " + text,
+            )
+            if ok:
+                forwarded_to = display
+                break
+            error = err
+    except Exception as exc:  # never let the room handler crash the bridge
+        error = str(exc)
+
+    if forwarded_to:
+        with contextlib.suppress(TelegramError):
+            await message.set_reaction("✅")
+        notice = (
+            f"↪ Forwarded to «{forwarded_to}» — its topic is where the reply will "
+            "appear. (This General topic is the agents' shared room; nothing "
+            "here reaches a session unless you @mention it.)"
+        )
+    else:
+        with contextlib.suppress(TelegramError):
+            await message.set_reaction("👀")
+        notice = (
+            "⚠️ Nobody received this. This General topic is the agents' shared "
+            "room: nothing here reaches a session unless you @mention it, and no "
+            "live session could take it"
+            + (f" ({error})" if error else "")
+            + ". Please write in the session's own topic."
+        )
     with contextlib.suppress(TelegramError):
-        await message.set_reaction("👀")
+        await message.reply_text(notice)
+
+
+def _wc_newest_human_prompt_ts(path: str) -> float | None:
+    """Timestamp (epoch) of the newest human prompt in a Claude Code transcript.
+
+    Scans backwards in 512 KB chunks (a long investigation turn can put megabytes
+    of tool traffic after the last human line), capped at 32 MB.
+    """
+    import json
+    from datetime import datetime
+
+    def _lines_from_end():
+        chunk = 512 * 1024
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                pos = size
+                carry = b""
+                scanned = 0
+                while pos > 0 and scanned < 32 * 1024 * 1024:
+                    step = min(chunk, pos)
+                    pos -= step
+                    f.seek(pos)
+                    block = f.read(step) + carry
+                    scanned += step
+                    lines = block.split(b"\n")
+                    carry = lines[0] if pos > 0 else b""
+                    for raw in reversed(lines[1:] if pos > 0 else lines):
+                        if raw.strip():
+                            yield raw
+        except OSError:
+            return
+
+    for raw in _lines_from_end():
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "user":
+            continue
+        if entry.get("isMeta"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        human = False
+        if isinstance(content, str):
+            human = bool(content.strip())
+        elif isinstance(content, list):
+            kinds = {b.get("type") for b in content if isinstance(b, dict)}
+            human = "text" in kinds and "tool_result" not in kinds
+        if not human:
+            continue
+        ts = entry.get("timestamp")
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+async def _wc_rank_windows_by_human_activity() -> list[tuple[str, str]]:
+    """Bound windows, most recently used by the human first: [(window_id, display)]."""
+    import asyncio
+
+    from .thread_router import thread_router
+    from .window_state_ports.identity_state import get_transcript_path
+    from .window_state_store import window_store
+
+    ranked: list[tuple[float, str, str]] = []
+    seen: set[str] = set()
+    for _user_id, _thread_id, window_id in thread_router.iter_thread_bindings():
+        if window_id in seen or window_id not in window_store.window_states:
+            continue
+        seen.add(window_id)
+        path = get_transcript_path(window_id)
+        ts = None
+        if path and os.path.exists(path):
+            ts = await asyncio.to_thread(_wc_newest_human_prompt_ts, path)
+        ranked.append((ts or 0.0, window_id, thread_router.get_display_name(window_id) or window_id))
+    ranked.sort(reverse=True)
+    return [(wid, display) for _ts, wid, display in ranked]

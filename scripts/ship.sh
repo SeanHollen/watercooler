@@ -31,7 +31,7 @@ run_gate() {
 
   echo "    -> bash -n (shell syntax)"
   local sh_files
-  sh_files="$(git ls-files '*.sh' bin/ | sort -u)"
+  sh_files="$(git ls-files --cached --others --exclude-standard '*.sh' bin/ | sort -u)"
   for f in $sh_files; do
     head -c2 "$f" | grep -q '#!' || continue
     head -1 "$f" | grep -qE 'bash|sh$' || continue
@@ -49,7 +49,7 @@ run_gate() {
   echo "    -> python syntax (patch scripts)"
   local py="${CCGRAM_PY:-python3}"
   [ -n "$CCGRAM_PY" ] || echo "       WARNING: ccgram venv python not found, using system python3"
-  $py -m py_compile $(git ls-files 'patch/*.py') || rc=1
+  $py -m py_compile $(git ls-files --cached --others --exclude-standard 'patch/*.py') || rc=1
 
   echo "    -> patches are idempotent (re-apply must be a no-op)"
   # The suite re-runs on every ccgram start, so a patch that isn't stable on
@@ -93,11 +93,18 @@ serve() {
   fi
   ./install.sh
   if systemctl list-unit-files ccgram.service >/dev/null 2>&1; then
-    echo "    restarting ccgram"
-    sudo systemctl restart ccgram
-    sleep 3
-    systemctl is-active --quiet ccgram || { echo "    ccgram did not come back up" >&2; exit 1; }
-    echo "    ccgram active"
+    # NEVER restart the bridge from inside a session's turn: it drops the reply that
+    # session is about to send (2026-10-21: this very script did that, mid-turn, and the
+    # session's final summary never reached Telegram). ccgram-safe-restart detaches a
+    # waiter that restarts once every ccgram session has been idle for 20 s and reports
+    # the outcome into the shipping session's own topic.
+    local topic=""
+    topic="$( (tg-send --resolve 2>/dev/null || true) | sed -n 's/.*topic=\([0-9][0-9]*\).*/\1/p')"
+    if [ -n "$topic" ]; then
+      "$HOME/.local/bin/ccgram-safe-restart" --reason "watercooler ship: $MSG" --notify-topic "$topic"
+    else
+      "$HOME/.local/bin/ccgram-safe-restart" --reason "watercooler ship: $MSG"
+    fi
   fi
 }
 
@@ -118,7 +125,7 @@ if git diff --cached --quiet; then
   echo "    (no changes to commit — shipping current HEAD)"
 else
   git commit -m "$MSG" \
-    -m "Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+    -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 fi
 git push origin "$(git rev-parse --abbrev-ref HEAD)"
 

@@ -225,6 +225,38 @@ Ordering note: `apply-audio-transcribe-patch.py` rewrites
 that file has to sort after it. `media` > `audio` alphabetically, which is why
 the suite self-heals in the right order — keep it that way.
 
+### Never lose a reply (2026-10-21): delivery guard + safe restarts + General forwarding
+
+**What happened.** A session ran `scripts/ship.sh` from inside its own turn; the ship ended with
+`sudo systemctl restart ccgram`. The Claude sessions survived (KillMode=process), but the
+session's final summary, written 35 s after the restart, never reached its Telegram topic — and
+nothing logged a failure. ccgram's relay is fire-and-forget: the transcript byte offset advances
+when a reply is *read* (not sent), the per-user send queue is in memory and dropped on shutdown,
+a routing miss is a debug log, and a failed `sendMessage` is a warning with no retry. Meanwhile
+the human's follow-ups, typed into the **General** topic, were logged to the room feed and
+delivered to nobody.
+
+Three fixes, all shipped here:
+
+- **`patch/apply-reply-guard-patch.py`** → `ccgram/delivery_guard.py`. Every complete assistant
+  text is hashed; the hash rides on the queue task and is recorded as *delivered* only when
+  Telegram accepted every part (`~/.ccgram/delivery_guard.json`, survives restarts). Audits run
+  20 s and 75 s after every Stop hook, 15 s after startup and every 60 s: the last reply of each
+  bound window's transcript is compared with the delivered set, and an undelivered one is re-sent
+  through the normal queue with a `delivery guard: re-sending` WARNING in the journal. Replies
+  older than 2 h, mid-turn notes (text followed by a tool call) and already-delivered text are
+  never touched; the first run seeds the current replies instead of re-sending history.
+  `journalctl -u ccgram | grep 'delivery guard'` shows what it did.
+- **`bin/ccgram-safe-restart`** — the only way anything restarts ccgram now. It detaches a waiter
+  that restarts once every ccgram session has been idle for 20 s (Claude Code's footer shows
+  `esc to interrupt` while a turn runs), with a 30 min cap, then posts the outcome into the
+  calling session's topic. `--check` lists mid-turn sessions; `--now` is the old behaviour.
+  `scripts/ship.sh` uses it, so shipping from inside a session never cuts off that session's reply.
+- **General topic forwarding** (`patch/general_handler_new.txt`). A human message in General with
+  no `@mention` is forwarded into the session the human most recently talked to (newest human
+  prompt across bound windows' transcripts) and a notice in General says where it went; if nothing
+  live can take it, the notice says so. `@mentions` still go to the named session as before.
+
 ### `bin/tg-send` — agent → human photo/file delivery
 
 ccgram relays an agent's *text* into its topic, but an agent had no way to show a

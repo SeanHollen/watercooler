@@ -10,7 +10,8 @@ one-time `*.orig` backup of the file it edits.
 
 | Patch | What it does |
 |-------|--------------|
-| `apply-general-patch.py` + `general_handler_new.txt` | Turns the Telegram **General** topic into the watercooler shared-room bus (log + `@mention` ping-injection) instead of ccgram's "use a named topic" nag. |
+| `apply-reply-guard-patch.py` | **Delivery guard** (2026-10-21): hashes every assistant reply, records what Telegram accepted (`~/.ccgram/delivery_guard.json`), audits after every Stop / at startup / every 60 s and re-sends any reply that never arrived. Restart-safe. |
+| `apply-general-patch.py` + `general_handler_new.txt` | Turns the Telegram **General** topic into the watercooler shared-room bus (log + `@mention` ping-injection) instead of ccgram's "use a named topic" nag. Since 2026-10-21 a human message with no @mention is **forwarded to the last-used session** with a notice, instead of being logged and dropped. |
 | `apply-keeptopic-patch.py` | Autoclose frees a session's RAM (kills the tmux window) but **keeps the Telegram topic**, so messaging it later can resume — instead of deleting the topic. |
 | `apply-resume-yolo-patch.py` | Resumed sessions launch in **bypass/`--dangerously-skip-permissions` mode**, not "normal" (ask) mode — so a resumed conversation doesn't stall on the first permission prompt. |
 | `apply-always-resume-patch.py` + `always-resume-helper.txt` + `always-resume-insert.txt` | A message to a topic whose window died **always resumes that topic's existing conversation** (exact session id, else `--continue`) in bypass mode — never starts a new session / directory browser. Fails safe: any error falls back to ccgram's original recovery UI. |
@@ -19,7 +20,7 @@ one-time `*.orig` backup of the file it edits.
 ```bash
 # copy the apply-*.py + *.txt into ~/.ccgram/, then:
 bash ~/.ccgram/apply-all-patches.sh
-sudo systemctl restart ccgram      # KillMode=process keeps live sessions alive
+ccgram-safe-restart                # waits until no session is mid-turn; never use systemctl restart directly
 ```
 
 ## systemd drop-ins (also here for reference)
