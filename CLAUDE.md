@@ -26,3 +26,8 @@ failure. That order matters in exactly one place: `apply-audio-transcribe-patch.
 **rewrites** `handlers/audio_transcribe.py` wholesale on every run, so any patch that
 *edits* that file must sort after it. `apply-media-autostart-patch.py` does. Keep new
 patches that touch it sorting after `apply-audio-*`.
+
+## bin/tg-send (added 2026-10-21)
+Python, not bash — the gate's `bash -n`/shellcheck loop skips it by shebang. Sends
+files to a Telegram topic via the Bot API; see README. Test with `tg-send --resolve`
+from inside a ccgram session; it must print `chat_id=… topic=<id>` for that session.

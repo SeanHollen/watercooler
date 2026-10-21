@@ -225,6 +225,28 @@ Ordering note: `apply-audio-transcribe-patch.py` rewrites
 that file has to sort after it. `media` > `audio` alphabetically, which is why
 the suite self-heals in the right order — keep it that way.
 
+### `bin/tg-send` — agent → human photo/file delivery
+
+ccgram relays an agent's *text* into its topic, but an agent had no way to show a
+picture. `tg-send` posts files with the Bot API directly (`sendPhoto`,
+`sendMediaGroup`, `sendDocument`), which never fights ccgram's polling — only
+`getUpdates` is single-consumer.
+
+```
+tg-send chart.png                     # the calling session's OWN topic
+tg-send --caption "scores" a.jpg b.jpg # album; >10 files = several albums
+tg-send --general report.pdf          # the shared General topic
+tg-send --topic 1732 x.png            # explicit forum topic id
+tg-send --document sheet.jpg          # uncompressed (Telegram shrinks photos to ~1280px)
+tg-send --resolve                     # print the target, send nothing
+```
+
+The own-topic lookup matches the calling tmux window's id against
+`thread_bindings` in `~/.ccgram/state.json`. A sidecar `<file>.caption.txt` is used
+as that file's caption. Token and group come from `~/.ccgram/.env`; the token is
+never printed. Exit 0 ok, 1 Telegram error, 2 usage/resolution error. (The human
+side already exists in stock ccgram: `/send <path>` in a topic uploads a file.)
+
 ## Credits
 
 The conversation model — a standing norm injected into every delivery, an

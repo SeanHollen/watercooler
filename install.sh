@@ -9,6 +9,7 @@ mkdir -p "$HOME/.local/bin" "$HOME/.ccgram"
 install -m 755 "$HERE/bin/broadcast"        "$HOME/.local/bin/broadcast"
 install -m 755 "$HERE/bin/general-inject"   "$HOME/.local/bin/general-inject"
 install -m 755 "$HERE/bin/roster"           "$HOME/.local/bin/roster"
+install -m 755 "$HERE/bin/tg-send"          "$HOME/.local/bin/tg-send"
 install -m 644 "$HERE/bin/watercooler-lib.sh" "$HOME/.local/bin/watercooler-lib.sh"
 cp "$HERE/patch/general_handler_new.txt"    "$HOME/.ccgram/general_handler_new.txt"
 
