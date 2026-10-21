@@ -7,6 +7,7 @@
   tg-send --topic 1732 chart.png           # an explicit forum topic id
   tg-send --document big.jpg               # force document (uncompressed, keeps full res)
   tg-send --resolve                        # print the topic that would be used, send nothing
+  tg-send --text "plain message"           # sendMessage (for when the ccgram relay is down)
 
 Per-file captions: if <file>.caption.txt exists it is used as that file's caption
 (the --caption flag applies to the first file otherwise). Captions are cut to 1024 chars.
@@ -114,6 +115,7 @@ def main():
     ap.add_argument("--general", action="store_true", help="post to the shared General topic")
     ap.add_argument("--document", action="store_true", help="send everything as documents")
     ap.add_argument("--resolve", action="store_true", help="print the resolved target and exit")
+    ap.add_argument("--text", default=None, help="send this plain-text message instead of files (<= 4096 chars)")
     a = ap.parse_args()
 
     env = read_env()
@@ -128,6 +130,12 @@ def main():
     if a.resolve:
         print(f"chat_id={env['CCGRAM_GROUP_ID']} topic={'General' if topic is None else topic}")
         return
+    if a.text is not None:
+        base = [("chat_id", env["CCGRAM_GROUP_ID"])] + ([("message_thread_id", str(topic))] if topic is not None else [])
+        r = api(env["TELEGRAM_BOT_TOKEN"], "sendMessage", base + [("text", a.text[:4096])], [])
+        ok = r.get("ok")
+        print(f"{'sent' if ok else 'FAILED'} text -> {'General' if topic is None else f'topic {topic}'}" + ("" if ok else f": {r.get('description')}"))
+        sys.exit(0 if ok else 1)
     if not a.files:
         die(2, "no files given")
     for f in a.files:

@@ -239,6 +239,7 @@ tg-send --general report.pdf          # the shared General topic
 tg-send --topic 1732 x.png            # explicit forum topic id
 tg-send --document sheet.jpg          # uncompressed (Telegram shrinks photos to ~1280px)
 tg-send --resolve                     # print the target, send nothing
+tg-send --text "plain message"        # sendMessage; a fallback when the ccgram relay drops a reply
 ```
 
 The own-topic lookup matches the calling tmux window's id against
