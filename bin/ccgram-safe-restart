@@ -45,7 +45,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+log() {
+  # The detached waiter's stderr IS the log file, so tee would print every line twice.
+  local line; line="$(date '+%F %T') $*"
+  printf '%s\n' "$line" >>"$LOG"
+  [ -t 2 ] && printf '%s\n' "$line" >&2
+  return 0
+}
 
 notify() {
   [ -n "$TOPIC" ] || return 0
